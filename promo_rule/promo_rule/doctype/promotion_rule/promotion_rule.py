@@ -46,8 +46,9 @@ def apply_promo_rule(name,items,pos_profile):
 	base_brand_present ={} 
 	discount = 0
 	dis =0
-	promo_list = frappe.db.sql("select name from `tabPromotion rule`", as_list=1)
+	promo_list = frappe.db.sql("select name from `tabPromotion rule` ORDER BY `priority` DESC", as_list=1)
 	promorules = [x[0] for x in promo_list]
+	frappe.errprint(promorules)
 
 	for x in doc['items']:    #count  amount of all  of the  brands and item group in cart  
 		if x['item_group'] not in igamount:
@@ -79,7 +80,10 @@ def apply_promo_rule(name,items,pos_profile):
 				poslist[pp.pos_profiles] =pp.pos_profiles
 			if pos_profile not in poslist:
 				continue
-			if get_datetime(p.to_date) < now_datetime() or get_datetime(p.from_date) > now_datetime() or not p.is_active:
+			if p.to_date < now_datetime().date() or p.from_date > now_datetime().date() or not p.is_active:
+				# frappe.errprint(now_datetime().date())
+				# frappe.errprint(get_datetime(p.to_date))
+				# frappe.errprint('date condition not satisfied')
 				continue
 				
 			if p.base_type == "Item Group" and p.target_type == "Item Group":
@@ -133,23 +137,41 @@ def apply_promo_rule(name,items,pos_profile):
 def igtotal(x,p):
 	if p.by_amount:
 		# frappe.errprint("by amount")
-		if x['item_group'] == p.base and p.is_active and igamount.get(x['item_group'], 0) >= p.min_amount:
+		#if base and target are same , then existing should be greater than min, else it will apply on same item 
+		if p.base == p.target and x['item_group'] == p.base and p.is_active and igamount.get(x['item_group'], 0) > p.min_amount:
+			if p.target not in base_ig_present:
+				base_ig_present[p.target] = p.name
+
+		elif p.base != p.target and x['item_group'] == p.base and p.is_active and igamount.get(x['item_group'], 0) >= p.min_amount:
 			if p.target not in base_ig_present:
 				base_ig_present[p.target] = p.name
 				
 	else:
-		if x['item_group'] == p.base and p.is_active and iglist.get(x['item_group'], 0) >= p.base_qty:
+		#if base and target are same , then existing should be greater than min, else it will apply on same item 
+		if p.base == p.target and x['item_group'] == p.base and p.is_active and iglist.get(x['item_group'], 0) >= (p.base_qty + p.target_qty):
+			if p.target not in base_ig_present:
+				base_ig_present[p.target] = p.name
+		elif p.base != p.target and x['item_group'] == p.base and p.is_active and iglist.get(x['item_group'], 0) >= p.base_qty:
 			if p.target not in base_ig_present:
 				base_ig_present[p.target] =p.name
 				frappe.errprint(base_ig_present)
 				
 def brandtotal(x,p):
+
 	if p.by_amount:
-		if x['brand'] == p.base and p.is_active and brandamout.get(x['brand'], 0) >= p.min_amount:
+		if p.base == p.target and x['brand'] == p.base and p.is_active and brandamout.get(x['brand'], 0) > p.min_amount :
+			if p.target not in base_brand_present:
+				base_brand_present[p.target] = p.name
+
+		elif p.base != p.target and x['brand'] == p.base and p.is_active and brandamout.get(x['brand'], 0) >= p.min_amount:
 			if p.target not in base_brand_present:
 				base_brand_present[p.target]=p.name
-	else:			
-		if x['brand'] == p.base and p.is_active and brandlist.get(x['brand'], 0) >= p.base_qty:
+	else:
+		if p.base == p.target and x['brand'] == p.base and p.is_active and brandlist.get(x['brand'], 0) >= (p.base_qty + p.target_qty):
+			if p.target not in base_brand_present:
+				base_brand_present[p.target] = p.name
+
+		if p.base != p.target and x['brand'] == p.base and p.is_active and brandlist.get(x['brand'], 0) >= p.base_qty:
 			if p.target not in base_brand_present:
 				base_brand_present[p.target] = p.name
 
@@ -162,6 +184,8 @@ def calculate_min_of_group(tgt,promo,doc,target_type):
 			if x['item_group'] == tgt:
 				temp_dict[x['item_code']] = x['rate']
 
+		round_two = False 
+		qty_issued =0 
 		min_amount_item =min(temp_dict, key=temp_dict.get)
 		frappe.errprint(min_amount_item)
 		for x in doc['items']:
@@ -171,6 +195,12 @@ def calculate_min_of_group(tgt,promo,doc,target_type):
 				discount = float(x['rate'] * p.discount_percentage * x ['qty']/ 100)
 				frappe.errprint(discount)
 				alt_dis =copy.deepcopy(discount)
+				qty_issued = x['qty']
+				round_two =True
+				frappe.errprint(temp_dict)
+				del temp_dict[min_amount_item]
+				frappe.errprint('after removal of lowest'),
+				frappe.errprint(temp_dict)
 			elif x['item_code'] == min_amount_item and x['qty'] > p.target_qty:
 				frappe.errprint("elif came")
 				discount = float(x['rate'] * p.discount_percentage * p.target_qty/ 100)
@@ -179,12 +209,64 @@ def calculate_min_of_group(tgt,promo,doc,target_type):
 			if x['item_code'] == min_amount_item and x ["item_code"] not in min_amount_list:
  				min_amount_list[min_amount_item] = alt_dis
  			frappe.errprint(min_amount_list)
-		
+		if round_two :
+			frappe.errprint('round 2 ')
+			round_three = False
+			min_amount_item =min(temp_dict, key=temp_dict.get)
+			for x in doc['items']:
+				frappe.errprint(x['item_code'])
+				if x['item_code'] == min_amount_item and x['qty'] <=(p.target_qty - qty_issued):
+					frappe.errprint("if satisfied")
+					discount = float(x['rate'] * p.discount_percentage * x ['qty']/ 100)
+					frappe.errprint(discount)
+					alt_dis =copy.deepcopy(discount)
+					qty_issued += x['qty']
+					round_three =True
+					frappe.errprint(temp_dict)
+					del temp_dict[min_amount_item]
+					frappe.errprint('after removal of lowest'),
+					frappe.errprint(temp_dict)
+				elif x['item_code'] == min_amount_item and x['qty'] > (p.target_qty - qty_issued):
+					frappe.errprint("elif came")
+					discount = float(x['rate'] * p.discount_percentage * (p.target_qty -qty_issued)/ 100)
+					alt_dis =copy.deepcopy(discount)
+				frappe.errprint(discount)
+				if x['item_code'] == min_amount_item and x ["item_code"] not in min_amount_list:
+ 					min_amount_list[min_amount_item] = alt_dis
+ 				frappe.errprint(min_amount_list)
+ 		if round_three :
+			frappe.errprint('round Three! ')
+			round_three = False
+			min_amount_item =min(temp_dict, key=temp_dict.get)
+			for x in doc['items']:
+				frappe.errprint(x['item_code'])
+				if x['item_code'] == min_amount_item and x['qty'] <=(p.target_qty - qty_issued):
+					frappe.errprint("if satisfied")
+					discount = float(x['rate'] * p.discount_percentage * x ['qty']/ 100)
+					frappe.errprint(discount)
+					alt_dis =copy.deepcopy(discount)
+					qty_issued += x['qty']
+					round_three =True
+					frappe.errprint(temp_dict)
+					del temp_dict[min_amount_item]
+					frappe.errprint('after removal of lowest'),
+					frappe.errprint(temp_dict)
+				elif x['item_code'] == min_amount_item and x['qty'] > (p.target_qty - qty_issued):
+					frappe.errprint("elif came")
+					discount = float(x['rate'] * p.discount_percentage * (p.target_qty -qty_issued)/ 100)
+					alt_dis =copy.deepcopy(discount)
+				frappe.errprint(discount)
+				if x['item_code'] == min_amount_item and x ["item_code"] not in min_amount_list:
+ 					min_amount_list[min_amount_item] = alt_dis
+ 				frappe.errprint(min_amount_list)
+
 	else:
 		for x in doc['items']:
 			if x['brand'] == tgt:
 				temp_dict[x['item_code']] = x['rate']
-		
+
+		round_two = False 
+		qty_issued =0
 		min_amount_item =min(temp_dict, key=temp_dict.get)
 
 		for x in doc['items']:
@@ -193,15 +275,73 @@ def calculate_min_of_group(tgt,promo,doc,target_type):
 				alt_dis =copy.deepcopy(discount)
 				frappe.errprint(discount)
 				frappe.errprint(alt_dis)
+				qty_issued = x['qty']
+				round_two =True
+				frappe.errprint(temp_dict)
+				del temp_dict[min_amount_item]
+				frappe.errprint('after removal of lowest'),
+				frappe.errprint(temp_dict)
 			elif x['item_code'] == min_amount_item and x['qty'] > p.target_qty:
 				discount = float(x['rate'] * p.discount_percentage * p.target_qty/ 100)
 				alt_dis =copy.deepcopy(discount)
 			frappe.errprint('target is brand')	
 			frappe.errprint(discount)
 			if x['item_code'] == min_amount_item and x ["item_code"] not in min_amount_list:
- 				min_amount_list[min_amount_item] = alt_dis		
+ 				min_amount_list[min_amount_item] = alt_dis
+ 			# elif x['item_code'] == min_amount_item and x ["item_code"] in min_amount_list:
+ 			# 	min_amount_list[min_amount_item] = alt_dis + min_amount_list.get(min_amount_item,0)
+ 		if round_two :
+			frappe.errprint('round 2 ')
+			round_three = False
+			min_amount_item =min(temp_dict, key=temp_dict.get)
+			for x in doc['items']:
+				frappe.errprint(x['item_code'])
+				if x['item_code'] == min_amount_item and x['qty'] <=(p.target_qty - qty_issued):
+					frappe.errprint("if satisfied")
+					discount = float(x['rate'] * p.discount_percentage * x ['qty']/ 100)
+					frappe.errprint(discount)
+					alt_dis =copy.deepcopy(discount)
+					qty_issued += x['qty']
+					round_three =True
+					frappe.errprint(temp_dict)
+					del temp_dict[min_amount_item]
+					frappe.errprint('after removal of lowest'),
+					frappe.errprint(temp_dict)
+				elif x['item_code'] == min_amount_item and x['qty'] > (p.target_qty - qty_issued):
+					frappe.errprint("elif came")
+					discount = float(x['rate'] * p.discount_percentage * (p.target_qty -qty_issued)/ 100)
+					alt_dis =copy.deepcopy(discount)
+				frappe.errprint(discount)
+				if x['item_code'] == min_amount_item and x ["item_code"] not in min_amount_list:
+ 					min_amount_list[min_amount_item] = alt_dis
+ 				frappe.errprint(min_amount_list)
+ 		if round_three :
+			frappe.errprint('round Three! ')
+			round_three = False
+			min_amount_item =min(temp_dict, key=temp_dict.get)
+			for x in doc['items']:
+				frappe.errprint(x['item_code'])
+				if x['item_code'] == min_amount_item and x['qty'] <=(p.target_qty - qty_issued):
+					frappe.errprint("if satisfied")
+					discount = float(x['rate'] * p.discount_percentage * x ['qty']/ 100)
+					frappe.errprint(discount)
+					alt_dis =copy.deepcopy(discount)
+					qty_issued += x['qty']
+					round_three =True
+					frappe.errprint(temp_dict)
+					del temp_dict[min_amount_item]
+					frappe.errprint('after removal of lowest'),
+					frappe.errprint(temp_dict)
+				elif x['item_code'] == min_amount_item and x['qty'] > (p.target_qty - qty_issued):
+					frappe.errprint("elif came")
+					discount = float(x['rate'] * p.discount_percentage * (p.target_qty -qty_issued)/ 100)
+					alt_dis =copy.deepcopy(discount)
+				frappe.errprint(discount)
+				if x['item_code'] == min_amount_item and x ["item_code"] not in min_amount_list:
+ 					min_amount_list[min_amount_item] = alt_dis
+ 				frappe.errprint(min_amount_list)
 
-		min_amount_list[min_amount_item] =alt_dis
+		# min_amount_list[min_amount_item] =alt_dis
 
 @frappe.whitelist()
 def type_query(doctype, txt, searchfield, start, page_len, filters):
